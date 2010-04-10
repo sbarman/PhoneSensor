@@ -1,14 +1,25 @@
+#include <iostream>
+#include <cmath>
+#include <fftw3.h>
+#include <alsa/asoundlib.h>
+#include <SDL/SDL.h>
+
 #include "sound.h"
 #include "graphics.h"
 
-#include <iostream>
-#include <cmath>
 
-#include <fftw3.h>
+extern snd_pcm_t *pcm_handle;
+extern const char* SOUND_DEVICE;
+extern signed char* data;
+extern snd_pcm_uframes_t periodsize;
+extern unsigned int frames;
+
+extern SDL_Surface* screen;
 
 int VOLTAGE_DIV = 24;
 int threshold = 700;
 int THRESH_ENABLE = true;
+
 
 int main(int argc, char** argv) {
 	if (!init_graphics())
@@ -42,6 +53,7 @@ int main(int argc, char** argv) {
 	int iteration = 0;
 	int maxval = 0;
 	int minval = 0;
+	double avg = 0;
 	while (running) {
 
 		// quit on backspace
@@ -91,10 +103,12 @@ int main(int argc, char** argv) {
 					running = false;
 					break;
 				case SDLK_z:
-					maxval = 0;
-					minval = 0;
+					maxval = INT_MIN;
+					minval = INT_MAX;
+					avg = 0;
 					for (snd_pcm_uframes_t i = 0; i < frames; i++) {
 						signed short value = ((signed short*) data)[2 * i];
+						avg += value;
 						if (value > maxval) {
 							maxval = value;
 						}
@@ -102,8 +116,8 @@ int main(int argc, char** argv) {
 							minval = value;
 						}
 					}
-					fprintf(stdout, "max:%d  min:%d\n", maxval, minval);
-					fprintf(stderr, "max:%d  min:%d\n", maxval, minval);
+					avg /= frames;
+					fprintf(stdout, "max:%d  min:%d avg: %f\n", maxval, minval, avg);
 					break;
 				default:
 					// ignore
@@ -148,7 +162,7 @@ int main(int argc, char** argv) {
 			if (in[i] < minval)
 				minval = in[i];
 
-			//fprintf(jlog,"%d,%d,%d,\n",iteration,(int)i,((signed short*)data)[2*i]);
+			fprintf(jlog,"%d,%d,%d,\n",iteration,(int)i,((signed short*)data)[2*i]);
 
 
 			//fprintf(jlog,"%d,%d,%d (raw input other channel)\n",iteration,(int)i,(int)(((signed short*)data)[2*i+1]) );
@@ -196,8 +210,8 @@ int main(int argc, char** argv) {
 			for (int i = 1; i < frames; i++) {
 				if (in[i] < threshold && in[i - 1] < threshold)
 					seenlessthresh = i;
-				if (in[i] >= threshold && seenlessthresh != -1 && i
-						- seenlessthresh < 10) //J: for positive thresh value, this gives rising edge
+				if (in[i] >= threshold && seenlessthresh != -1 && i - seenlessthresh
+						< 10) //J: for positive thresh value, this gives rising edge
 				{
 					start = i;
 					break;
@@ -224,13 +238,13 @@ int main(int argc, char** argv) {
 				//for(int r=0; r< DIM_sh; r++)
 				for (int r = 0; r < DIM_sh; r++) {
 					if (vlast <= v) {
-						((char*) screen->pixels)[DIM_sw * r + c] = (vlast <= r
-								&& r <= v) ? 200 : 0;
+						((char*) screen->pixels)[DIM_sw * r + c]
+								= (vlast <= r && r <= v) ? 200 : 0;
 					}
 
 					if (vlast > v) {
-						((char*) screen->pixels)[DIM_sw * r + c] = (v <= r && r
-								<= vlast) ? 200 : 0;
+						((char*) screen->pixels)[DIM_sw * r + c]
+								= (v <= r && r <= vlast) ? 200 : 0;
 					}
 
 				}
