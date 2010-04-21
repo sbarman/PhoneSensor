@@ -7,21 +7,9 @@
 
 #include "graphics.h"
 
-
+// Buffer for screen
 SDL_Surface *screen;
 SDL_Color colors[256];
-
-
-// XSP pixel doubling toggle
-// This sets 400x240 video mode on N810
-void set_doubling(unsigned char enable) {
-	SDL_SysWMinfo wminfo;
-	SDL_VERSION(&wminfo.version);
-	SDL_GetWMInfo(&wminfo);
-	if (enable == 255)
-		enable = 0;
-	XSPSetPixelDoubling(wminfo.info.x11.display, 0, enable);
-}
 
 int init_graphics() {
 	// video system init
@@ -42,9 +30,6 @@ int init_graphics() {
 
 	// hide cursor
 	SDL_ShowCursor(0);
-
-	// XSP PIXEL DOUBLING
-	//set_doubling(1);
 
 	// set up 256 color palette (we are in 8bpp mode)
 	// dark blue
@@ -77,9 +62,7 @@ int init_graphics() {
 	return 1;
 }
 
-void deinit_graphics() {
-	// restore original video mode
-	set_doubling(0);
+void close_graphics() {
 }
 
 void take_screenshot() {
