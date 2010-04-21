@@ -9,6 +9,7 @@
 
 // Buffer for screen
 SDL_Surface *screen;
+// Array of colors used
 SDL_Color colors[256];
 
 int init_graphics() {

@@ -11,30 +11,18 @@
 
 /* Sound related variables */
 extern snd_pcm_t *pcm_handle;
-extern snd_pcm_uframes_t frames;
-extern snd_pcm_uframes_t buffer_size;
-extern unsigned int sample_rate;
-extern unsigned int periods;
 
 /* Graphics related variables */
 extern SDL_Surface *screen;
 
 static void *reader_thread(void *data) {
 	alsa_shared *shared_data = (alsa_shared *) data;
-	fprintf(stdout, "Buffer address is %x\n", shared_data->buffer);
 	while (shared_data->running) {
-		int frames_left = frames;
+		int frames_left = shared_data->frames_in_period;
 		while (frames_left > 0) {
 			// Use a buffer large enough to hold one period
-			// 2 bytes/sample, 2 channels
-			signed short *buffer = (signed short *) (((char*) shared_data->buffer)
+			signed short *buffer = (signed short *) (shared_data->buffer
 					+ (shared_data->frame_size * shared_data->writer_position));
-
-			//	fprintf(stdout,
-			//			"Reading from address %x with writer position %d, shared buffer %x,
-			//frame size %d for %d frames\n",
-			//			buffer, shared_data->writer_position, shared_data->buffer,
-			//shared_data->frame_size, frames_left);
 
 			// Read audio data from mic
 			int pcmreturn;
@@ -49,17 +37,20 @@ static void *reader_thread(void *data) {
 				exit(1);
 				snd_pcm_prepare(pcm_handle);
 			}
-			if (pcmreturn != (int) frames) {
+			if (pcmreturn != (int) frames_left) {
 				fprintf(stdout, "Short read, read %d frames\n", pcmreturn);
 			}
 
 			frames_left -= pcmreturn;
 			shared_data->writer_position += pcmreturn;
-			if (shared_data->writer_position > shared_data->frames_in_buffer) {
+			if (shared_data->writer_position >= shared_data->frames_in_buffer) {
 				shared_data->writer_position -= shared_data->frames_in_buffer;
 			}
 		}
+		// Alert the logger more data has arrived
 		sem_post(shared_data->unwritten_periods);
+
+		// Check to see if we have overwritten the enture
 		int num_unwritten_periods;
 		sem_getvalue(shared_data->unwritten_periods, &num_unwritten_periods);
 		if (num_unwritten_periods > shared_data->max_periods) {
@@ -67,14 +58,14 @@ static void *reader_thread(void *data) {
 		}
 	}
 
-	while()
 	fprintf(stdout, "Closing reader thread\n");
 	return NULL;
 }
 
 static void *log_thread(void *data) {
 	alsa_shared *shared_data = (alsa_shared *) data;
-	signed short *buffer = shared_data->buffer;
+	signed short *buffer = (signed short *) shared_data->buffer;
+	snd_pcm_uframes_t frames_in_period = shared_data->frames_in_period;
 	sem_t *unwritten_periods = shared_data->unwritten_periods;
 	FILE *log = shared_data->log;
 
@@ -86,11 +77,14 @@ static void *log_thread(void *data) {
 		while (shared_data->running || num_unwritten_periods > 0) {
 			sem_wait(unwritten_periods);
 			int pos = shared_data->log_position;
-			for (snd_pcm_uframes_t i = pos; i < pos + frames; i++) {
+			// need to multiple by 2 when accessing buffer because data is interleaved
+			for (snd_pcm_uframes_t i = pos; i < pos + frames_in_period; i++) {
 				fprintf(log, "%lu,%d,%d\n", count, buffer[2 * i], buffer[2 * i + 1]);
 				count++;
 			}
-			shared_data->log_position += frames;
+			// increment the current position
+			shared_data->log_position += frames_in_period;
+			// reset if we reached the end of buffer
 			if (shared_data->log_position >= shared_data->frames_in_buffer) {
 				shared_data->log_position -= shared_data->frames_in_buffer;
 			}
@@ -111,26 +105,45 @@ int main(int argc, char** argv) {
 
 	if (!init_sound()) {
 		exit(-1);
-	} else {
-		fprintf(stdout,
-				"Sound initialized with sample rate %ud Hz, buffer size of %ud bytes,"
-					" period size of %ud bytes and %d periods\n", sample_rate,
-				(unsigned int) buffer_size, (unsigned int) frames, periods);
 	}
+
+	// Get the current hw parameters
+	snd_pcm_hw_params_t *hwparams;
+	snd_pcm_hw_params_alloca(&hwparams);
+	snd_pcm_hw_params_current(pcm_handle, hwparams);
+
+	snd_pcm_uframes_t frames;
+	snd_pcm_uframes_t alsa_buffer_size;
+	unsigned int periods;
+	unsigned int rate;
+
+	snd_pcm_hw_params_get_period_size(hwparams, &frames, 0);
+	snd_pcm_hw_params_get_buffer_size(hwparams, &alsa_buffer_size);
+	snd_pcm_hw_params_get_periods(hwparams, &periods, 0);
+	snd_pcm_hw_params_get_rate(hwparams, &rate, 0);
+
+	fprintf(stdout,
+			"Sound initialized with sample rate %ud Hz, buffer size of %ud bytes,"
+				" period size of %ud bytes and %d periods\n", rate,
+			(unsigned int) alsa_buffer_size, (unsigned int) frames, periods);
 
 	// buffer to share between threads
 	alsa_shared shared_data;
+
 	shared_data.pcm_handle = pcm_handle;
 	shared_data.frames_in_period = frames;
-	shared_data.max_periods = sample_rate / frames;
+	// create a buffer for ~1 sec
+	shared_data.max_periods = rate / frames;
 	shared_data.frames_in_buffer = shared_data.max_periods
 			* shared_data.frames_in_period;
-
-	// each frame is 2 channels * 2 bytes per channel
-	shared_data.frame_size = 4;
+	// each frame should be 4 bytes (2 channels * 2 bytes per channel)
+	shared_data.frame_size = snd_pcm_frames_to_bytes(pcm_handle, 1);
 	int buffer_size = shared_data.frame_size * shared_data.frames_in_buffer;
-	shared_data.buffer = (signed short *) malloc(buffer_size);
+
+	shared_data.buffer = (char *) malloc(buffer_size);
 	memset(shared_data.buffer, 0, buffer_size);
+
+	// writer and log both start at 0
 	shared_data.writer_position = 0;
 	shared_data.log_position = 0;
 
@@ -150,7 +163,7 @@ int main(int argc, char** argv) {
 			stdout,
 			"Shared data initialized with %d frames in buffer, %d frames in period, "
 				"%d max periods, %d bytes per frame, %d buffer size and logging to %s\n",
-			shared_data.frames_in_buffer, shared_data.frames_in_period,
+			(int) shared_data.frames_in_buffer, (int) shared_data.frames_in_period,
 			shared_data.max_periods, shared_data.frame_size, buffer_size, fname);
 
 	pthread_t log_tid;
@@ -227,34 +240,40 @@ int main(int argc, char** argv) {
 		}
 
 		// Render the screen
-		unsigned int start = 0;
 
-		signed short *buffer = shared_data.buffer;
+		signed short *buffer = (signed short *) shared_data.buffer;
+
+		int screen_width = DIM_sw;
+
+		if (shared_data.frames_in_buffer < screen_width * time_div) {
+			screen_width = shared_data.frames_in_buffer / time_div;
+		}
+
+		int buffer_position = shared_data.writer_position - (screen_width
+				* time_div);
+
+		if (buffer_position < 0) {
+			buffer_position += shared_data.frames_in_buffer;
+		}
 
 		if (thresh_enable) {
-			int seenlessthresh = -1;
-			for (unsigned int i = 1; i < shared_data.frames_in_buffer; i++) {
-				if (buffer[i * 2] < threshold && buffer[(i - 1) * 2] < threshold)
-					seenlessthresh = i;
-				//J: for positive thresh value, this gives rising edge
-				if (buffer[i * 2] >= threshold && seenlessthresh != -1 && i
-						- seenlessthresh < 10) {
-					start = i;
-					break;
-				}
-			}
+
 		}
 
 		// free-running waveform or we found a valid value above threshold
-		if (!thresh_enable || (thresh_enable && start != 0)) {
+		if (!thresh_enable || (thresh_enable)) {
 
-			signed short v = buffer[0];
-			signed short vlast = buffer[0];
+			signed short v = buffer[(buffer_position) * 2];
+			signed short vlast = buffer[(buffer_position) * 2];
 			int origin = DIM_sh / 2;
 
-			for (unsigned int c = 0; c < DIM_sw; c++) {
-				if ((start + c * time_div) < shared_data.frames_in_buffer) {
-					v = buffer[(start + c * time_div) * 2];
+			for (int c = 0; c < DIM_sw; c++) {
+				if (c < screen_width) {
+					v = buffer[(buffer_position) * 2];
+					buffer_position += time_div;
+					if (buffer_position >= shared_data.frames_in_buffer) {
+						buffer_position -= shared_data.frames_in_buffer;
+					}
 				} else {
 					v = 0;
 				}
@@ -287,7 +306,7 @@ int main(int argc, char** argv) {
 	fprintf(stdout, "Closing scope\n");
 	fclose(log);
 
-//	sem_destroy(shared_data.unwritten_periods);
+	//	sem_destroy(shared_data.unwritten_periods);
 	close_graphics();
 	close_sound();
 }

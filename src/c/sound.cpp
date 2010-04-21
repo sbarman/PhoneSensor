@@ -12,7 +12,7 @@ snd_pcm_t *pcm_handle;
 const char* SOUND_DEVICE = "hw:0,0";
 
 // desired sample rate of microphone input
-const unsigned int SAMPLE_RATE = 20000;
+const unsigned int SAMPLE_RATE = 8000;
 
 // desired number of frames in a period
 const unsigned int FRAMES = 3840;
@@ -20,17 +20,6 @@ const unsigned int FRAMES = 3840;
 // desired number of periods in buffer
 const unsigned int PERIODS = 32;
 
-// actual sample rate
-unsigned int sample_rate;
-
-// actual frames in a period
-snd_pcm_uframes_t frames;
-
-// actual buffer size
-snd_pcm_uframes_t buffer_size;
-
-// actual number of periods in buffer
-unsigned int periods;
 
 int init_sound() {
 	// record sound from mic
@@ -79,7 +68,7 @@ int init_sound() {
 
 	/* Set sample rate. If the exact rate is not supported
 	 * by the hardware, use nearest possible rate. */
-	sample_rate = SAMPLE_RATE;
+	unsigned int sample_rate = SAMPLE_RATE;
 	if (snd_pcm_hw_params_set_rate_near(pcm_handle, hwparams, &sample_rate, 0)
 			< 0) {
 		fprintf(stderr, "Error setting rate.\n");
@@ -96,8 +85,7 @@ int init_sound() {
 		return (-1);
 	}
 
-	snd_pcm_uframes_t size = FRAMES * PERIODS;
-	buffer_size = size;
+	snd_pcm_uframes_t buffer_size = FRAMES * PERIODS;
 	if (snd_pcm_hw_params_set_buffer_size_max(pcm_handle, hwparams, &buffer_size)
 			< 0) {
 		fprintf(stderr, "Error setting buffer to maximium size.\n");
@@ -105,14 +93,14 @@ int init_sound() {
 	}
 
 	// Set number of periods. Periods used to be called fragments.
-	periods = PERIODS;
+	int periods = PERIODS;
 	if (snd_pcm_hw_params_set_periods(pcm_handle, hwparams, periods, 0) < 0) {
 		fprintf(stderr, "Error setting periods.\n");
 		return (-1);
 	}
 
 	// Set period size. Periods used to be called fragments.
-	frames = FRAMES;
+	snd_pcm_uframes_t frames = FRAMES;
 	if (snd_pcm_hw_params_set_period_size_near(pcm_handle, hwparams, &frames, 0)
 			< 0) {
 		fprintf(stderr, "Error setting periods.\n");
@@ -127,10 +115,6 @@ int init_sound() {
 		return (-1);
 	}
 
-	snd_pcm_hw_params_get_period_size(hwparams, &frames, 0);
-	snd_pcm_hw_params_get_periods(hwparams, &periods, 0);
-	snd_pcm_hw_params_get_buffer_size(hwparams, &buffer_size);
-
 	return 1;
 }
 
@@ -142,33 +126,3 @@ void close_sound() {
 	snd_pcm_drain(pcm_handle);
 	snd_pcm_close(pcm_handle);
 }
-
-void print_info() {
-	int val;
-
-	printf("ALSA library version: %s\n", SND_LIB_VERSION_STR);
-
-	printf("\nPCM stream types:\n");
-	for (val = 0; val <= SND_PCM_STREAM_LAST; val++)
-		printf("  %s\n", snd_pcm_stream_name((snd_pcm_stream_t) val));
-
-	printf("\nPCM access types:\n");
-	for (val = 0; val <= SND_PCM_ACCESS_LAST; val++)
-		printf("  %s\n", snd_pcm_access_name((snd_pcm_access_t) val));
-
-	printf("\nPCM formats:\n");
-	for (val = 0; val <= SND_PCM_FORMAT_LAST; val++)
-		if (snd_pcm_format_name((snd_pcm_format_t) val) != NULL)
-			printf("  %s (%s)\n", snd_pcm_format_name((snd_pcm_format_t) val),
-					snd_pcm_format_description((snd_pcm_format_t) val));
-
-	printf("\nPCM subformats:\n");
-	for (val = 0; val <= SND_PCM_SUBFORMAT_LAST; val++)
-		printf("  %s (%s)\n", snd_pcm_subformat_name((snd_pcm_subformat_t) val),
-				snd_pcm_subformat_description((snd_pcm_subformat_t) val));
-
-	printf("\nPCM states:\n");
-	for (val = 0; val <= SND_PCM_STATE_LAST; val++)
-		printf("  %s\n", snd_pcm_state_name((snd_pcm_state_t) val));
-}
-
