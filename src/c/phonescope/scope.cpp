@@ -141,6 +141,9 @@ int main(int argc, char** argv) {
 	int buffer_size = shared_data.frame_size * shared_data.frames_in_buffer;
 
 	shared_data.buffer = (char *) malloc(buffer_size);
+	if (shared_data.buffer == NULL) {
+		fprintf(std, "Error. Not enough memory\n");
+	}
 	memset(shared_data.buffer, 0, buffer_size);
 
 	// writer and log both start at 0
