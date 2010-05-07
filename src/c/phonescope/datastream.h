@@ -3,10 +3,11 @@
 
 class DataStream {
 public:
-	unsigned int get_data(short *buffer, int frames);
-	unsigned int block_size_in_frames();
-	unsigned int max_buffer_size_in_frames();
-	bool running();
+	virtual unsigned int get_data(short *buffer, int frames);
+	virtual unsigned int block_size_in_frames();
+	virtual unsigned int max_buffer_size_in_frames();
+	virtual unsigned int frame_size();
+	virtual bool running();
 };
 
 #endif /*DATASTREAM*/

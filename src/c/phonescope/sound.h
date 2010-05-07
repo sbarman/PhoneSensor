@@ -27,7 +27,7 @@ public:
 
 class AlsaDataSource;
 
-class AlsaDataStream : DataStream {
+class AlsaDataStream : public DataStream {
 	AlsaDataSource *source;
 	unsigned int reader_position;
 
@@ -38,6 +38,7 @@ public:
 	unsigned int get_data(short *buffer, int size);
 	unsigned int block_size_in_frames();
 	unsigned int max_buffer_size_in_frames();
+	unsigned int frame_size();
 	bool running();
 };
 

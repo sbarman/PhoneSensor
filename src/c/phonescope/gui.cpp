@@ -6,49 +6,61 @@
 
 #include "scope.h"
 #include "gui.h"
+#include "datastream.h"
 
-gboolean expose_event_callback(GtkWidget *widget,
-		GdkEventExpose *event, gpointer data) {
-	alsa_shared *shared_data = (alsa_shared *) data;
-	// Render the screen
-	signed short *buffer = (signed short *) shared_data->buffer;
+gboolean screen_change_callback(GtkWidget *widget, GdkEventConfigure *event,
+		gpointer user_data) {
+	printf("screen change\n");
+	PhoneScopeGui *gui = (PhoneScopeGui *) user_data;
+	int values_count = widget->allocation.width;
+	printf("val %d\n", values_count);
+	DrawingAreaVars *dav = gui->drawing_area_vars;
+	pthread_mutex_lock(dav->mutex_read);
+	pthread_mutex_lock(dav->mutex_write);
 
+	free(gui->drawing_area_vars->values);
+	gui->drawing_area_vars->values = (short *) malloc(sizeof(short)
+			* values_count);
+	gui->drawing_area_vars->values_count = values_count;
+
+	pthread_mutex_unlock(dav->mutex_write);
+	pthread_mutex_unlock(dav->mutex_read);
+
+	return TRUE;
+}
+
+gboolean expose_event_callback(GtkWidget *widget, GdkEventExpose *event,
+		gpointer data) {
+	printf("expose\n");
+	PhoneScopeGui *gui = (PhoneScopeGui *) data;
+	DrawingAreaVars *dav = gui->drawing_area_vars;
+
+	pthread_mutex_lock(dav->mutex_read);
+
+	short *values = dav->values;
 	int screen_width = widget->allocation.width;
-	int time_div = 16;
-	int voltage_div = 50;
-	if (shared_data->frames_in_buffer < screen_width * time_div) {
-		screen_width = shared_data->frames_in_buffer / time_div;
+	printf("sc %d %d\n", screen_width, dav->values_count);
+	if (dav->values_count < screen_width) {
+		screen_width = dav->values_count;
 	}
-
-	int buffer_position = shared_data->writer_position
-			- (screen_width * time_div);
-
-	if (buffer_position < 0) {
-		buffer_position += shared_data->frames_in_buffer;
-	}
-
+	int screen_height = widget->allocation.height;
 	GdkPoint *points = (GdkPoint *) malloc(sizeof(GdkPoint) * screen_width);
-	// free-running waveform or we found a valid value above threshold
 
-	signed short v = buffer[(buffer_position)];
-	int origin = widget->allocation.height / 2;
+	signed short v = 0;
+	int origin = (screen_height / 2) + dav->offset;
 
 	for (int c = 0; c < screen_width; c++) {
-		v = buffer[(buffer_position) * 2];
-		buffer_position += time_div;
-		if (buffer_position >= shared_data->frames_in_buffer) {
-			buffer_position -= shared_data->frames_in_buffer;
-		}
-
-		int disp_v = (v / voltage_div) + origin;
+		v = values[c];
+		int disp_v = (v / dav->ampl_scale) + origin;
 		points[c].x = c;
 		points[c].y = disp_v;
-
 	}
+
+	pthread_mutex_unlock(dav->mutex_read);
 
 	gdk_draw_points(widget->window,
 			widget->style->fg_gc[GTK_WIDGET_STATE(widget)], points, screen_width);
-	delete points;
+	free(points);
 	return TRUE;
 }
 
@@ -62,14 +74,41 @@ void close_application_callback(GtkWidget *widget, gpointer data) {
 gboolean update_drawing_area_callback(gpointer data) {
 	GtkWidget *widget = (GtkWidget *) data;
 	gtk_widget_queue_draw(widget);
-	//gdk_window_process_all_updates();
+	gdk_window_process_all_updates();
 	return TRUE;
 }
 
-void PhoneScopeGui::update_drawing_area() {
-	GtkWidget *widget = drawing_area;
-	gtk_widget_queue_draw(widget);
-	//gdk_window_process_all_updates();
+void *update_values_thread(void *args) {
+	PhoneScopeGui *gui = (PhoneScopeGui *) args;
+	DataStream *datastream = gui->datastream;
+	DrawingAreaVars *dav = gui->drawing_area_vars;
+	signed short *buffer = (signed short *) malloc(
+			datastream->block_size_in_frames() * datastream->frame_size());
+
+	while (1) {
+		int block_size = datastream->block_size_in_frames();
+		datastream->get_data(buffer, block_size);
+
+		pthread_mutex_lock(dav->mutex_write);
+
+		short *values = dav->values;
+		int time_scale = dav->time_scale;
+
+		int shift = block_size / time_scale;
+		//	memcpy(values + shift, values, sizeof(short) * (dav->values_count - shift));
+
+		for (int i = 0; i < dav->values_count; i++) {
+			values[i] = buffer[2 * (i) * time_scale];
+		}
+		pthread_mutex_unlock(dav->mutex_write);
+
+	}
+	/*
+	 // Render the screen
+
+	 int buffer_size = datastream->block_size_in_frames();
+	 */
+
 }
 
 PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
@@ -99,14 +138,23 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 	gtk_box_pack_start(GTK_BOX(box2), table, TRUE, TRUE, 0);
 	gtk_widget_show( table);
 
+	datastream = shared_data->source->getDataStream();
 	drawing_area = gtk_drawing_area_new();
 	gtk_widget_set_size_request(drawing_area, 100, 100);
 	gtk_table_attach_defaults(GTK_TABLE(table), GTK_WIDGET(drawing_area), 0, 1,
 			0, 1);
-	g_signal_connect(G_OBJECT(drawing_area), "expose_event", G_CALLBACK(
-			expose_event_callback), shared_data);
 	gtk_widget_add_events(drawing_area, GDK_ALL_EVENTS_MASK);
 	gtk_widget_show( drawing_area);
+
+	int values_count = GTK_WIDGET(drawing_area)->allocation.width;
+	short *values = (short *) malloc(sizeof(short) * values_count);
+	drawing_area_vars = new DrawingAreaVars(values, values_count, 1, 1, 0);
+	printf("first %d %d\n", values_count, drawing_area_vars->values_count);
+
+	g_signal_connect(G_OBJECT(drawing_area), "expose_event", G_CALLBACK(
+			expose_event_callback), this);
+	g_signal_connect(G_OBJECT(drawing_area), "configure-event", G_CALLBACK(
+			screen_change_callback), this);
 
 	separator = gtk_hseparator_new();
 	gtk_box_pack_start(GTK_BOX(box1), separator, FALSE, TRUE, 0);
@@ -125,13 +173,31 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 	gtk_widget_grab_default( button);
 	gtk_widget_show(button);
 
-	gtk_widget_show(window);
+	gtk_widget_show( window);
 
-	g_timeout_add (100, update_drawing_area_callback, drawing_area);
+	g_timeout_add(100, update_drawing_area_callback, drawing_area);
+
+	pthread_t read_tid;
+	int ret = pthread_create(&read_tid, NULL, update_values_thread, this);
+	if (ret < 0) {
+		fprintf(stderr, "failed to create reader thread %d\n", ret);
+	}
 
 }
 
 void PhoneScopeGui::run() {
 	gtk_main();
+}
+
+DrawingAreaVars::DrawingAreaVars(short *v, int vc, int ts, int as, int o) {
+	values = v;
+	values_count = vc;
+	time_scale = ts;
+	ampl_scale = as;
+	offset = o;
+	mutex_read = new pthread_mutex_t();
+	pthread_mutex_init(mutex_read, NULL);
+	mutex_write = new pthread_mutex_t();
+	pthread_mutex_init(mutex_write, NULL);
 }
 

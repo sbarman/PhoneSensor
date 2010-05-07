@@ -281,6 +281,10 @@ unsigned int AlsaDataStream::max_buffer_size_in_frames() {
 	return source->frames_in_buffer;
 }
 
+unsigned int AlsaDataStream::frame_size() {
+	return source->frame_size;
+}
+
 bool AlsaDataStream::running() {
 	return source->running;
 }

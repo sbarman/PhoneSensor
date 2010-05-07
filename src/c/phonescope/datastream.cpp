@@ -16,3 +16,7 @@ bool DataStream::running() {
 	return false;
 }
 
+unsigned int DataStream::frame_size() {
+	return 0;
+}
+

@@ -30,12 +30,11 @@ static void *log_thread(void *data) {
 
 	unsigned long count = 0;
 	if (log != NULL) {
-		while (shared_data->running) {
-
+		while (datastream->running()) {
 			datastream->get_data(buffer, source->frames_in_period);
 			for (short i = 0; i < source->frames_in_period; i++) {
-				fprintf(log, "%lu,%d,%d\n", count, buffer[2 * i], buffer[2 * i + 1]);
-				//fprintf(log, "%d\n", buffer[2 * i]);
+				//fprintf(log, "%lu,%d,%d\n", count, buffer[2 * i], buffer[2 * i + 1]);
+	//			fprintf(log, "%d\n", buffer[2 * i]);
 				count++;
 			}
 		}
@@ -66,9 +65,8 @@ int main(int argc, char** argv) {
 	alsa_shared shared_data;
 	AlsaDataSource source(sound);
 	shared_data.source = &source;
-	shared_data.buffer = source.buffer;
-	shared_data.frames_in_buffer = source.frames_in_buffer;
-	shared_data.writer_position = 0;
+
+	source.start();
 
 	// log to store all microphone data
 	char fname[20] = "jlog";
@@ -76,20 +74,8 @@ int main(int argc, char** argv) {
 	if (log == NULL) {
 		fprintf(stderr, "Unable to open log\n");
 	}
-	//shared_data.log = stdout;
-	shared_data.log = log;
-
-	/*
-	 fprintf(
-	 stderr,
-	 "Shared data initialized with %d frames in buffer, %d frames in period, "
-	 "%d max periods, %d bytes per frame, %d buffer size and logging to %s\n",
-	 (int) shared_data.frames_in_buffer, (int) shared_data.frames_in_period,
-	 shared_data.max_periods, shared_data.frame_size, buffer_size, fname);
-	 */
-
-	PhoneScopeGui gui(&shared_data);
-	shared_data.gui = &gui;
+	shared_data.log = stdout;
+	//shared_data.log = log;
 
 	pthread_t log_tid;
 	int ret = pthread_create(&log_tid, NULL, log_thread, &shared_data);
@@ -98,8 +84,9 @@ int main(int argc, char** argv) {
 		return ret;
 	}
 
-	source.start();
+	PhoneScopeGui gui(&shared_data);
 
+	// will block until close button is hit
 	gui.run();
 
 	source.stop();
