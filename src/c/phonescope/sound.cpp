@@ -1,30 +1,14 @@
-#pragma once
-
 #include <alsa/asoundlib.h>
+#include <list>
+#include <string.h>
+#include <stdio.h>
 
 #include "sound.h"
 
-// Handle for the PCM device
-snd_pcm_t *pcm_handle;
-
-// Maemo sound device is named "default"
-// J: THIS WORKS REALLY WELL FOR THE N900 EXTERNAL MIC
-const char* SOUND_DEVICE = "hw:0,0";
-
-// desired sample rate of microphone input
-const unsigned int SAMPLE_RATE = 8000;
-
-// desired number of frames in a period
-const unsigned int FRAMES = 3840;
-
-// desired number of periods in buffer
-const unsigned int PERIODS = 32;
-
-
-int init_sound() {
+int AlsaSound::init(char* pcm_name, unsigned int sample_rate,
+		snd_pcm_uframes_t frames, unsigned int periods) {
 	// record sound from mic
 	snd_pcm_stream_t stream = SND_PCM_STREAM_CAPTURE;
-	char *pcm_name = strdup(SOUND_DEVICE);
 
 	/* Open PCM. The last parameter of this function is the mode.
 	 * If this is set to 0, the standard mode is used. Possible
@@ -38,8 +22,6 @@ int init_sound() {
 		fprintf(stderr, "Error opening PCM device %s\n", pcm_name);
 		return (-1);
 	}
-
-	snd_pcm_hw_params_t *hwparams;
 
 	// Allocate the snd_pcm_hw_params_t structure on the stack.
 	snd_pcm_hw_params_alloca(&hwparams);
@@ -68,15 +50,15 @@ int init_sound() {
 
 	/* Set sample rate. If the exact rate is not supported
 	 * by the hardware, use nearest possible rate. */
-	unsigned int sample_rate = SAMPLE_RATE;
-	if (snd_pcm_hw_params_set_rate_near(pcm_handle, hwparams, &sample_rate, 0)
+	unsigned int new_sample_rate = sample_rate;
+	if (snd_pcm_hw_params_set_rate_near(pcm_handle, hwparams, &new_sample_rate, 0)
 			< 0) {
 		fprintf(stderr, "Error setting rate.\n");
 		return (-1);
 	}
-	if (SAMPLE_RATE != sample_rate) {
+	if (new_sample_rate != sample_rate) {
 		fprintf(stderr, "The rate %ud Hz is not supported by your hardware.\n"
-			"==> Using %ud Hz instead.\n", SAMPLE_RATE, sample_rate);
+			"==> Using %ud Hz instead.\n", sample_rate, new_sample_rate);
 	}
 
 	// Set number of channels
@@ -85,7 +67,7 @@ int init_sound() {
 		return (-1);
 	}
 
-	snd_pcm_uframes_t buffer_size = FRAMES * PERIODS;
+	snd_pcm_uframes_t buffer_size = frames * periods;
 	if (snd_pcm_hw_params_set_buffer_size_max(pcm_handle, hwparams, &buffer_size)
 			< 0) {
 		fprintf(stderr, "Error setting buffer to maximium size.\n");
@@ -93,14 +75,12 @@ int init_sound() {
 	}
 
 	// Set number of periods. Periods used to be called fragments.
-	int periods = PERIODS;
 	if (snd_pcm_hw_params_set_periods(pcm_handle, hwparams, periods, 0) < 0) {
 		fprintf(stderr, "Error setting periods.\n");
 		return (-1);
 	}
 
 	// Set period size. Periods used to be called fragments.
-	snd_pcm_uframes_t frames = FRAMES;
 	if (snd_pcm_hw_params_set_period_size_near(pcm_handle, hwparams, &frames, 0)
 			< 0) {
 		fprintf(stderr, "Error setting periods.\n");
@@ -115,14 +95,192 @@ int init_sound() {
 		return (-1);
 	}
 
+	snd_pcm_hw_params_alloca(&hwparams);
+	snd_pcm_hw_params_current(pcm_handle, hwparams);
+
 	return 1;
 }
 
-void close_sound() {
+snd_pcm_t *AlsaSound::get_pcm_handle() {
+	return pcm_handle;
+}
+
+snd_pcm_uframes_t AlsaSound::get_frames() {
+	snd_pcm_uframes_t frames;
+	snd_pcm_hw_params_get_period_size(hwparams, &frames, 0);
+	return frames;
+}
+
+snd_pcm_uframes_t AlsaSound::get_buffer_size() {
+	snd_pcm_uframes_t alsa_buffer_size;
+	snd_pcm_hw_params_get_buffer_size(hwparams, &alsa_buffer_size);
+	return alsa_buffer_size;
+}
+
+unsigned int AlsaSound::get_periods() {
+	unsigned int periods;
+	snd_pcm_hw_params_get_periods(hwparams, &periods, 0);
+	return periods;
+}
+
+unsigned int AlsaSound::get_rate() {
+	unsigned int rate;
+	snd_pcm_hw_params_get_rate(hwparams, &rate, 0);
+	return rate;
+}
+
+void AlsaSound::close() {
 	// Stop PCM device and drop pending frames
-	snd_pcm_drop(pcm_handle);
+	snd_pcm_drop( pcm_handle);
 
 	// Stop PCM device after pending frames have been played
 	snd_pcm_drain(pcm_handle);
 	snd_pcm_close(pcm_handle);
+}
+
+// AlsaDataSource functions
+AlsaDataSource::AlsaDataSource(AlsaSound sound) {
+	// info from AlsaSound
+	unsigned int rate = sound.get_rate();
+
+	pcm_handle = sound.get_pcm_handle();
+
+	frames_in_period = sound.get_frames();
+	// create a buffer for ~1 sec
+	max_periods = rate / frames_in_period;
+	frames_in_buffer = max_periods * frames_in_period;
+	// each frame should be 4 bytes (2 channels * 2 bytes per channel)
+	frame_size = snd_pcm_frames_to_bytes(pcm_handle, 1);
+	int buffer_size = frame_size * frames_in_buffer;
+
+	buffer = (char *) malloc(buffer_size);
+	if (buffer == NULL) {
+		fprintf(stderr, "Error. Not enough memory\n");
+	}
+	memset(buffer, 0, buffer_size);
+
+	writer_position = 0;
+	running = true;
+	streams = new std::list<AlsaDataStream*>();
+}
+
+static void *reader_thread(void *arg) {
+	AlsaDataSource *source = (AlsaDataSource *) arg;
+	snd_pcm_t *pcm_handle = source->pcm_handle;
+
+	while (source->running) {
+		int frames_left = source->frames_in_period;
+		while (frames_left > 0) {
+			// Use a buffer large enough to hold one period
+			signed short *buffer = (signed short *) (source->buffer
+					+ (source->frame_size * source->writer_position));
+
+			// Read audio data from mic
+			int pcmreturn;
+			while ((pcmreturn = snd_pcm_readi(pcm_handle, buffer, frames_left)) < 0) {
+				if (pcmreturn == -EPIPE) {
+					/* EPIPE means overrun */
+					fprintf(stderr, "Overrun occurred\n");
+				} else if (pcmreturn < 0) {
+					fprintf(stderr, "Error from read: %d, %s\n", pcmreturn, snd_strerror(
+							pcmreturn));
+				}
+				exit(1);
+				snd_pcm_prepare(pcm_handle);
+			}
+			if (pcmreturn != (int) frames_left) {
+				fprintf(stderr, "Short read, read %d frames\n", pcmreturn);
+			}
+
+			frames_left -= pcmreturn;
+			source->writer_position += pcmreturn;
+			if (source->writer_position >= source->frames_in_buffer) {
+				source->writer_position -= source->frames_in_buffer;
+			}
+		}
+
+		std::list<AlsaDataStream*>::iterator it;
+		// Alert the logger more data has arrived
+		for (it = source->streams->begin(); it != source->streams->end(); it++) {
+			sem_post((*it)->unwritten_periods);
+		}
+
+		// Check to see if we have overwritten the enture
+		//int num_unwritten_periods;
+		//sem_getvalue(shared_data->unwritten_periods, &num_unwritten_periods);
+		//if (num_unwritten_periods > shared_data->max_periods) {
+		//	fprintf(stderr, "Log not able to keep up with pcm_read\n");
+		//}
+	}
+
+	fprintf(stderr, "Closing reader thread\n");
+	return NULL;
+}
+
+int AlsaDataSource::start() {
+	int ret = pthread_create(&reader_tid, NULL, reader_thread, this);
+	if (ret < 0) {
+		fprintf(stderr, "failed to create reader thread %d\n", ret);
+		return ret;
+	}
+	return 1;
+}
+
+AlsaDataStream *AlsaDataSource::getDataStream() {
+	AlsaDataStream *stream = new AlsaDataStream(this);
+	streams->push_back(stream);
+	return stream;
+}
+
+int AlsaDataSource::stop() {
+	running = false;
+	pthread_join(reader_tid, NULL);
+	return 1;
+}
+
+AlsaDataStream::AlsaDataStream(AlsaDataSource *s) {
+	source = s;
+	reader_position = source->writer_position;
+
+	unwritten_periods = new sem_t();
+	sem_init(unwritten_periods, false, 0);
+}
+
+// AlsaDataStream functions
+unsigned int AlsaDataStream::get_data(short *buffer, int frames) {
+	snd_pcm_uframes_t frames_in_period = source->frames_in_period;
+	int extra_frames = frames % frames_in_period;
+	frames -= extra_frames;
+
+	while (source->running && frames > 0) {
+		signed short *sourcebuffer = (signed short *) (source->buffer
+				+ (source->frame_size * reader_position));
+
+		sem_wait( unwritten_periods);
+		memcpy(buffer, sourcebuffer, source->frame_size * frames_in_period);
+
+		frames -= frames_in_period;
+
+		// increment the current position
+		reader_position += frames_in_period;
+		buffer += 2 * frames_in_period;
+
+		// reset if we reached the end of buffer
+		if (reader_position >= source->frames_in_buffer) {
+			reader_position -= source->frames_in_buffer;
+		}
+	}
+	return 0;
+}
+
+unsigned int AlsaDataStream::block_size_in_frames() {
+	return source->frames_in_period;
+}
+
+unsigned int AlsaDataStream::max_buffer_size_in_frames() {
+	return source->frames_in_buffer;
+}
+
+bool AlsaDataStream::running() {
+	return source->running;
 }
