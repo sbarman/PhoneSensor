@@ -8,52 +8,45 @@
 #include "gui.h"
 #include "datastream.h"
 
-gboolean screen_change_callback(GtkWidget *widget, GdkEventConfigure *event,
-		gpointer user_data) {
-	printf("screen change\n");
-	PhoneScopeGui *gui = (PhoneScopeGui *) user_data;
-	int values_count = widget->allocation.width;
-	printf("val %d\n", values_count);
-	DrawingAreaVars *dav = gui->drawing_area_vars;
-	pthread_mutex_lock(dav->mutex_read);
-	pthread_mutex_lock(dav->mutex_write);
-
-	free(gui->drawing_area_vars->values);
-	gui->drawing_area_vars->values = (short *) malloc(sizeof(short)
-			* values_count);
-	gui->drawing_area_vars->values_count = values_count;
-
-	pthread_mutex_unlock(dav->mutex_write);
-	pthread_mutex_unlock(dav->mutex_read);
-
-	return TRUE;
-}
-
 gboolean expose_event_callback(GtkWidget *widget, GdkEventExpose *event,
 		gpointer data) {
-	printf("expose\n");
 	PhoneScopeGui *gui = (PhoneScopeGui *) data;
 	DrawingAreaVars *dav = gui->drawing_area_vars;
 
 	pthread_mutex_lock(dav->mutex_read);
 
 	short *values = dav->values;
+	int values_count = dav->values_count;
+	int cur_position = dav->cur_position;
+	int time_scale = dav->time_scale;
+	int ampl_scale = dav->ampl_scale;
+
 	int screen_width = widget->allocation.width;
-	printf("sc %d %d\n", screen_width, dav->values_count);
-	if (dav->values_count < screen_width) {
-		screen_width = dav->values_count;
+	if (values_count / time_scale < screen_width) {
+		screen_width = values_count / time_scale;
 	}
 	int screen_height = widget->allocation.height;
+	int origin = (screen_height / 2);
+
 	GdkPoint *points = (GdkPoint *) malloc(sizeof(GdkPoint) * screen_width);
 
-	signed short v = 0;
-	int origin = (screen_height / 2) + dav->offset;
+	int buff_position = cur_position - (screen_width * time_scale);
+	if (buff_position < 0) {
+		buff_position += values_count;
+	}
+
+	signed short a = 0;
 
 	for (int c = 0; c < screen_width; c++) {
-		v = values[c];
-		int disp_v = (v / dav->ampl_scale) + origin;
+		a = values[(buff_position) * 2];
+		buff_position += time_scale;
+		if (buff_position >= values_count) {
+			buff_position -= values_count;
+		}
+
+		a = (a / ampl_scale) + origin;
 		points[c].x = c;
-		points[c].y = disp_v;
+		points[c].y = a;
 	}
 
 	pthread_mutex_unlock(dav->mutex_read);
@@ -71,6 +64,28 @@ void close_application_callback(GtkWidget *widget, gpointer data) {
 	gtk_main_quit();
 }
 
+void increment_time_callback(GtkWidget *widget, gpointer data) {
+	DrawingAreaVars *dav = (DrawingAreaVars *) data;
+	dav->time_scale *= 2;
+}
+
+void decrement_time_callback(GtkWidget *widget, gpointer data) {
+	DrawingAreaVars *dav = (DrawingAreaVars *) data;
+	if (dav->time_scale > 1)
+		dav->time_scale /= 2;
+}
+
+void increment_ampl_callback(GtkWidget *widget, gpointer data) {
+	DrawingAreaVars *dav = (DrawingAreaVars *) data;
+	dav->ampl_scale++;
+}
+
+void decrement_ampl_callback(GtkWidget *widget, gpointer data) {
+	DrawingAreaVars *dav = (DrawingAreaVars *) data;
+	if (dav->ampl_scale > 1)
+		dav->ampl_scale--;
+}
+
 gboolean update_drawing_area_callback(gpointer data) {
 	GtkWidget *widget = (GtkWidget *) data;
 	gtk_widget_queue_draw(widget);
@@ -78,37 +93,46 @@ gboolean update_drawing_area_callback(gpointer data) {
 	return TRUE;
 }
 
+void save_file_callback(GtkWidget *widget, gpointer data) {
+	PhoneScopeGui *gui = (PhoneScopeGui *) data;
+	GtkWidget *dialog;
+	dialog = gtk_file_chooser_dialog_new ("Save File",
+					      GTK_WINDOW(gui->window),
+					      GTK_FILE_CHOOSER_ACTION_SAVE,
+					      GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+					      GTK_STOCK_SAVE, GTK_RESPONSE_ACCEPT,
+					      NULL);
+	gtk_file_chooser_set_do_overwrite_confirmation (GTK_FILE_CHOOSER (dialog), FALSE);
+  gtk_file_chooser_set_filename (GTK_FILE_CHOOSER (dialog), ".ekg");
+	if (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_ACCEPT)
+	  {
+	    char *filename;
+	    filename = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER (dialog));
+	    g_free (filename);
+	  }
+	gtk_widget_destroy (dialog);
+}
+
 void *update_values_thread(void *args) {
 	PhoneScopeGui *gui = (PhoneScopeGui *) args;
 	DataStream *datastream = gui->datastream;
 	DrawingAreaVars *dav = gui->drawing_area_vars;
-	signed short *buffer = (signed short *) malloc(
-			datastream->block_size_in_frames() * datastream->frame_size());
+	int block_size = datastream->block_size_in_frames();
+	int frame_size = datastream->frame_size();
+	signed short *buffer = (signed short *) malloc(block_size * frame_size);
 
 	while (1) {
-		int block_size = datastream->block_size_in_frames();
 		datastream->get_data(buffer, block_size);
 
 		pthread_mutex_lock(dav->mutex_write);
-
-		short *values = dav->values;
-		int time_scale = dav->time_scale;
-
-		int shift = block_size / time_scale;
-		//	memcpy(values + shift, values, sizeof(short) * (dav->values_count - shift));
-
-		for (int i = 0; i < dav->values_count; i++) {
-			values[i] = buffer[2 * (i) * time_scale];
+		short * values_buffer = dav->values + (2 * dav->cur_position);
+		memcpy(values_buffer, buffer, block_size * frame_size);
+		dav->cur_position += block_size;
+		if (dav->cur_position >= dav->values_count) {
+			dav->cur_position -= dav->values_count;
 		}
 		pthread_mutex_unlock(dav->mutex_write);
-
 	}
-	/*
-	 // Render the screen
-
-	 int buffer_size = datastream->block_size_in_frames();
-	 */
-
 }
 
 PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
@@ -127,38 +151,88 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 	gtk_container_add(GTK_CONTAINER(window), box1);
 	gtk_widget_show( box1);
 
+	notebook = gtk_notebook_new();
+	gtk_box_pack_start(GTK_BOX(box1), notebook, TRUE, TRUE, 0);
+	gtk_widget_show(notebook);
+
 	box2 = gtk_vbox_new(FALSE, 10);
 	gtk_container_set_border_width(GTK_CONTAINER(box2), 10);
-	gtk_box_pack_start(GTK_BOX(box1), box2, TRUE, TRUE, 0);
-	gtk_widget_show( box2);
+	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), box2, gtk_label_new("ECG"));
+	gtk_widget_show(box2);
 
 	table = gtk_table_new(2, 2, FALSE);
-	//gtk_table_set_row_spacing(GTK_TABLE(table), 0, 2);
-	//gtk_table_set_col_spacing(GTK_TABLE(table), 0, 2);
 	gtk_box_pack_start(GTK_BOX(box2), table, TRUE, TRUE, 0);
 	gtk_widget_show( table);
 
 	datastream = shared_data->source->getDataStream();
 	drawing_area = gtk_drawing_area_new();
-	gtk_widget_set_size_request(drawing_area, 100, 100);
 	gtk_table_attach_defaults(GTK_TABLE(table), GTK_WIDGET(drawing_area), 0, 1,
-			0, 1);
+			0, 2);
 	gtk_widget_add_events(drawing_area, GDK_ALL_EVENTS_MASK);
 	gtk_widget_show( drawing_area);
 
-	int values_count = GTK_WIDGET(drawing_area)->allocation.width;
-	short *values = (short *) malloc(sizeof(short) * values_count);
+	int values_count = datastream->block_size_in_frames() * 200;
+	short *values = (short *) malloc(sizeof(short) * values_count * 2);
 	drawing_area_vars = new DrawingAreaVars(values, values_count, 1, 1, 0);
-	printf("first %d %d\n", values_count, drawing_area_vars->values_count);
 
 	g_signal_connect(G_OBJECT(drawing_area), "expose_event", G_CALLBACK(
 			expose_event_callback), this);
-	g_signal_connect(G_OBJECT(drawing_area), "configure-event", G_CALLBACK(
-			screen_change_callback), this);
+
+	box2 = gtk_vbox_new(FALSE, 5);
+	gtk_table_attach(GTK_TABLE(table), GTK_WIDGET(box2), 1, 2, 0, 2, GTK_SHRINK,
+			GTK_SHRINK, 0, 0);
+	gtk_widget_show(box2);
+
+	int button_size = 50;
+
+	button = gtk_button_new_with_label("+");
+	gtk_signal_connect(GTK_OBJECT(button), "pressed", GTK_SIGNAL_FUNC(
+			increment_time_callback), drawing_area_vars);
+	gtk_widget_set_size_request(button, button_size, button_size);
+	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
+	gtk_widget_show( button);
+
+	button = gtk_button_new_with_label("-");
+	gtk_signal_connect(GTK_OBJECT(button), "clicked", GTK_SIGNAL_FUNC(
+			decrement_time_callback), drawing_area_vars);
+	gtk_widget_set_size_request(button, button_size, button_size);
+	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
+	gtk_widget_show(button);
+
+	separator = gtk_hseparator_new();
+	gtk_box_pack_start(GTK_BOX(box2), separator, FALSE, TRUE, 0);
+	gtk_widget_show( separator);
+
+	button = gtk_button_new_with_label("+");
+	gtk_signal_connect(GTK_OBJECT(button), "clicked", GTK_SIGNAL_FUNC(
+			increment_ampl_callback), drawing_area_vars);
+	gtk_widget_set_size_request(button, button_size, button_size);
+	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
+	gtk_widget_show(button);
+
+	button = gtk_button_new_with_label("-");
+	gtk_signal_connect(GTK_OBJECT(button), "clicked", GTK_SIGNAL_FUNC(
+			decrement_ampl_callback), drawing_area_vars);
+	gtk_widget_set_size_request(button, button_size, button_size);
+	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
+	gtk_widget_show(button);
+
+	button = gtk_button_new_with_label("Save");
+	gtk_signal_connect(GTK_OBJECT(button), "clicked", GTK_SIGNAL_FUNC(
+			save_file_callback), this);
+	gtk_widget_set_size_request(button, button_size, button_size);
+	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
+	gtk_widget_show(button);
+
+
+	box2 = gtk_vbox_new(FALSE, 10);
+	gtk_container_set_border_width(GTK_CONTAINER(box2), 10);
+	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), box2, gtk_label_new("Info"));
+	gtk_widget_show(box2);
 
 	separator = gtk_hseparator_new();
 	gtk_box_pack_start(GTK_BOX(box1), separator, FALSE, TRUE, 0);
-	gtk_widget_show( separator);
+	gtk_widget_show(separator);
 
 	box2 = gtk_hbox_new(FALSE, 10);
 	gtk_container_set_border_width(GTK_CONTAINER(box2), 10);
@@ -170,7 +244,7 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 			close_application_callback), shared_data);
 	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
 	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_widget_grab_default( button);
+	gtk_widget_grab_default(button);
 	gtk_widget_show(button);
 
 	gtk_widget_show( window);
@@ -195,6 +269,7 @@ DrawingAreaVars::DrawingAreaVars(short *v, int vc, int ts, int as, int o) {
 	time_scale = ts;
 	ampl_scale = as;
 	offset = o;
+	cur_position = 0;
 	mutex_read = new pthread_mutex_t();
 	pthread_mutex_init(mutex_read, NULL);
 	mutex_write = new pthread_mutex_t();

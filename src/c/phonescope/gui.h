@@ -13,23 +13,24 @@ public:
 	int values_count;
 	int time_scale;
 	int ampl_scale;
+	int cur_position;
 	int offset;
-  pthread_mutex_t *mutex_read;
-  pthread_mutex_t *mutex_write;
+	pthread_mutex_t *mutex_read;
+	pthread_mutex_t *mutex_write;
 };
 
 class PhoneScopeGui {
 	// widgets
-	GtkWidget *window;
 	GtkWidget *box1;
+	GtkWidget *notebook;
 	GtkWidget *box2;
 	GtkWidget *button;
 	GtkWidget *separator;
 	GtkWidget *table;
 	GtkWidget *drawing_area;
 
-
 public:
+	GtkWidget *window;
 	DataStream *datastream;
 	DrawingAreaVars *drawing_area_vars;
 
