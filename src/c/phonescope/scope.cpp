@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
 		return ret;
 	}
 
+	shared_data.gui_data_stream = source.getDataStream();
+
 	PhoneScopeGui gui(&shared_data);
 
 	// will block until close button is hit

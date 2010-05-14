@@ -164,7 +164,7 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 	gtk_box_pack_start(GTK_BOX(box2), table, TRUE, TRUE, 0);
 	gtk_widget_show( table);
 
-	datastream = shared_data->source->getDataStream();
+	datastream = shared_data->gui_data_stream;
 	drawing_area = gtk_drawing_area_new();
 	gtk_table_attach_defaults(GTK_TABLE(table), GTK_WIDGET(drawing_area), 0, 1,
 			0, 2);

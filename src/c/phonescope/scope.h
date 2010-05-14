@@ -8,6 +8,8 @@ struct alsa_shared {
 	//AlsaSound *sound;
 	AlsaDataSource *source;
 
+	DataStream *gui_data_stream;
+
 	// log file
 	FILE* log;
 
