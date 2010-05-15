@@ -44,8 +44,9 @@ static void *log_thread(void *data) {
 			if (count > data_count) {
 				printf("Ending log\n");
 				fclose(log);
-				log = NULL;
-				shared_data->log = NULL;
+
+				char fname[20] = "jlog";
+				FILE* log = fopen(fname, "w");
 			}
 		}
 
