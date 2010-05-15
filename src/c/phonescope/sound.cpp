@@ -141,7 +141,7 @@ void AlsaSound::close() {
 // AlsaDataSource functions
 AlsaDataSource::AlsaDataSource(AlsaSound sound) {
 	// info from AlsaSound
-	unsigned int rate = sound.get_rate();
+	rate = sound.get_rate();
 
 	pcm_handle = sound.get_pcm_handle();
 
@@ -199,11 +199,7 @@ static void *reader_thread(void *arg) {
 			}
 		}
 
-		std::list<AlsaDataStream*>::iterator it;
-		// Alert the logger more data has arrived
-		for (it = source->streams->begin(); it != source->streams->end(); it++) {
-			sem_post((*it)->unwritten_periods);
-		}
+		sem_post( source->modulated_periods);
 
 		// Check to see if we have overwritten the enture
 		//int num_unwritten_periods;
@@ -217,13 +213,60 @@ static void *reader_thread(void *arg) {
 	return NULL;
 }
 
+static void *demodulation_thread(void *arg) {
+	AlsaDataSource *source = (AlsaDataSource *) arg;
+	source->demodulator_position = source->writer_position;
+
+	source->modulated_periods = new sem_t();
+	sem_init(source->modulated_periods, false, 0);
+
+	while (source->running) {
+		sem_wait( source->modulated_periods);
+
+		signed short *buffer = (signed short *) (source->buffer
+							+ (source->frame_size * source->demodulator_position));
+
+		for (int i = 0; i < source->frames_in_period; i++) {
+			/*
+			 * Demodulate this period;
+			 *
+			 */
+			//buffer[i*2] = buffer[i*2] / 200;
+		}
+
+		source->demodulator_position += source->frames_in_period;
+		if (source->demodulator_position >= source->frames_in_buffer) {
+			source->demodulator_position -= source->frames_in_buffer;
+		}
+
+		std::list<AlsaDataStream*>::iterator it;
+		// Alert the logger more data has arrived
+		for (it = source->streams->begin(); it != source->streams->end(); it++) {
+			sem_post((*it)->unwritten_periods);
+		}
+	}
+
+	fprintf(stderr, "Closing modulation thread\n");
+	return NULL;
+}
+
 int AlsaDataSource::start() {
 	int ret = pthread_create(&reader_tid, NULL, reader_thread, this);
 	if (ret < 0) {
 		fprintf(stderr, "failed to create reader thread %d\n", ret);
 		return ret;
 	}
+
+	ret = pthread_create(&demodulation_tid, NULL, demodulation_thread, this);
+	if (ret < 0) {
+		fprintf(stderr, "failed to create reader thread %d\n", ret);
+		return ret;
+	}
 	return 1;
+}
+
+int AlsaDataSource::getRate() {
+	return rate;
 }
 
 AlsaDataStream *AlsaDataSource::getDataStream() {

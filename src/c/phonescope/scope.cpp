@@ -28,35 +28,39 @@ static void *log_thread(void *data) {
 			* source->frame_size);
 	FILE *log = shared_data->log;
 	short data_points[DTAPTS];
+	int index = 0;
+
+	long count = 0;
+	long data_count = source->getRate() * 15;
 
 	while (datastream->running()) {
-		int index = 0;
 
-		while (index < DTAPTS) {
-			datastream->get_data(buffer, source->frames_in_period);
-			for (short i = 0; i < source->frames_in_period && index < DTAPTS; i += 2) {
-				data_points[index] = buffer[i];
-				index++;
+		datastream->get_data(buffer, source->frames_in_period);
+		if (log != NULL) {
+			for (short i = 0; i < source->frames_in_period; i++) {
+				fprintf(log, "%lu,%d,%d\n", count, buffer[2 * i], buffer[2 * i + 1]);
+				count++;
+			}
+			if (count > data_count) {
+				printf("Ending log\n");
+				fclose(log);
+				log = NULL;
+				shared_data->log = NULL;
 			}
 		}
-		float pbm = calcBPM(data_points);
-		printf("%f\n", pbm);
-		shared_data->heart_rate = pbm;
+
+		for (short i = 0; i < source->frames_in_period && index < DTAPTS; i += 2) {
+			data_points[index] = buffer[i];
+			index++;
+		}
+
+		if (index >= DTAPTS) {
+			float pbm = calcBPM(data_points);
+			shared_data->heart_rate = pbm;
+			index = 0;
+		}
 	}
 
-	/*
-	 unsigned long count = 0;
-	 if (log != NULL) {
-	 while (datastream->running()) {
-	 datastream->get_data(buffer, source->frames_in_period);
-	 for (short i = 0; i < source->frames_in_period; i++) {
-	 //fprintf(log, "%lu,%d,%d\n", count, buffer[2 * i], buffer[2 * i + 1]);
-	 //			fprintf(log, "%d\n", buffer[2 * i]);
-	 count++;
-	 }
-	 }
-	 }
-	 */
 	fprintf(stderr, "Closing log thread\n");
 	return NULL;
 }
@@ -97,8 +101,8 @@ int main(int argc, char** argv) {
 	if (log == NULL) {
 		fprintf(stderr, "Unable to open log\n");
 	}
-	shared_data.log = stdout;
-	//shared_data.log = log;
+	//shared_data.log = stdout;
+	shared_data.log = log;
 	shared_data.heart_rate = 0;
 
 	pthread_t log_tid;
@@ -111,7 +115,7 @@ int main(int argc, char** argv) {
 	fnc_info function_info;
 	function_info.type = SIN;
 	function_info.freq = 1000;
-	function_info.ampl = .1;
+	function_info.ampl = .25;
 	function_info.offset = 0;
 	snd_args sound_args = { argc, argv, &function_info };
 
@@ -131,7 +135,9 @@ int main(int argc, char** argv) {
 
 	pthread_join(log_tid, NULL);
 	fprintf(stderr, "Closing scope\n");
-	fclose(log);
+	if (shared_data.log != NULL) {
+		fclose(shared_data.log);
+	}
 
 	//	delete shared_data.unwritten_periods;
 	sound.close();

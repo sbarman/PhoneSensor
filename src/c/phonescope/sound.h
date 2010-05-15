@@ -12,8 +12,8 @@ class AlsaSound {
 	snd_pcm_hw_params_t *hwparams;
 
 public:
-	int init(char* pcm_name, unsigned int sample_rate,
-			snd_pcm_uframes_t frames, unsigned int periods);
+	int init(char* pcm_name, unsigned int sample_rate, snd_pcm_uframes_t frames,
+			unsigned int periods);
 
 	snd_pcm_t *get_pcm_handle();
 	snd_pcm_uframes_t get_frames();
@@ -27,7 +27,7 @@ public:
 
 class AlsaDataSource;
 
-class AlsaDataStream : public DataStream {
+class AlsaDataStream: public DataStream {
 	AlsaDataSource *source;
 	unsigned int reader_position;
 
@@ -57,14 +57,21 @@ public:
 	// sizes given in number of frames
 	unsigned int writer_position;
 
+	//demodulation
+	unsigned int demodulator_position;
+	sem_t *modulated_periods;
+
 	pthread_t reader_tid;
+	pthread_t demodulation_tid;
 
 	std::list<AlsaDataStream*> *streams;
 	bool running;
+	int rate;
 
 	AlsaDataSource(AlsaSound sound);
 	int start();
 	AlsaDataStream *getDataStream();
+	int getRate();
 	int stop();
 };
 
