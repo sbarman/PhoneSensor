@@ -3,6 +3,12 @@ enum fnc_type {
 	SIN, TRIANGLE, SQUARE
 };
 
+struct snd_args {
+	int argc;
+	char **argv;
+	fnc_info *function_info;
+};
+
 struct fnc_info {
 	fnc_type type;
 	double freq;

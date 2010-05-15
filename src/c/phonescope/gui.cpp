@@ -93,24 +93,35 @@ gboolean update_drawing_area_callback(gpointer data) {
 	return TRUE;
 }
 
+gboolean update_heart_rate_callback(gpointer data) {
+	PhoneScopeGui *gui = (PhoneScopeGui *) data;
+
+	if (gui->data->heart_rate == 0) {
+		gtk_label_set_text(GTK_LABEL(gui->label),"--");
+	} else {
+		char *text = new char[30];
+		sprintf(text, "%.4g", gui->data->heart_rate);
+		gtk_label_set_text(GTK_LABEL(gui->label),text);
+		delete text;
+	}
+	return TRUE;
+}
+
 void save_file_callback(GtkWidget *widget, gpointer data) {
 	PhoneScopeGui *gui = (PhoneScopeGui *) data;
 	GtkWidget *dialog;
-	dialog = gtk_file_chooser_dialog_new ("Save File",
-					      GTK_WINDOW(gui->window),
-					      GTK_FILE_CHOOSER_ACTION_SAVE,
-					      GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
-					      GTK_STOCK_SAVE, GTK_RESPONSE_ACCEPT,
-					      NULL);
-	gtk_file_chooser_set_do_overwrite_confirmation (GTK_FILE_CHOOSER (dialog), FALSE);
-  gtk_file_chooser_set_filename (GTK_FILE_CHOOSER (dialog), ".ekg");
-	if (gtk_dialog_run (GTK_DIALOG (dialog)) == GTK_RESPONSE_ACCEPT)
-	  {
-	    char *filename;
-	    filename = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER (dialog));
-	    g_free (filename);
-	  }
-	gtk_widget_destroy (dialog);
+	dialog = gtk_file_chooser_dialog_new("Save File", GTK_WINDOW(gui->window),
+			GTK_FILE_CHOOSER_ACTION_SAVE, GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+			GTK_STOCK_SAVE, GTK_RESPONSE_ACCEPT, NULL);
+	gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog),
+			FALSE);
+	gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(dialog), ".ekg");
+	if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+		char *filename;
+		filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+		g_free(filename);
+	}
+	gtk_widget_destroy(dialog);
 }
 
 void *update_values_thread(void *args) {
@@ -137,6 +148,8 @@ void *update_values_thread(void *args) {
 
 PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 
+	data = shared_data;
+
 	gtk_init(NULL, NULL);
 
 	window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -153,12 +166,12 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 
 	notebook = gtk_notebook_new();
 	gtk_box_pack_start(GTK_BOX(box1), notebook, TRUE, TRUE, 0);
-	gtk_widget_show(notebook);
+	gtk_widget_show( notebook);
 
 	box2 = gtk_vbox_new(FALSE, 10);
 	gtk_container_set_border_width(GTK_CONTAINER(box2), 10);
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), box2, gtk_label_new("ECG"));
-	gtk_widget_show(box2);
+	gtk_widget_show( box2);
 
 	table = gtk_table_new(2, 2, FALSE);
 	gtk_box_pack_start(GTK_BOX(box2), table, TRUE, TRUE, 0);
@@ -224,11 +237,22 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 	gtk_box_pack_start(GTK_BOX(box2), button, TRUE, TRUE, 0);
 	gtk_widget_show(button);
 
-
 	box2 = gtk_vbox_new(FALSE, 10);
 	gtk_container_set_border_width(GTK_CONTAINER(box2), 10);
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), box2, gtk_label_new("Info"));
 	gtk_widget_show(box2);
+
+	box3 = gtk_hbox_new(FALSE, 0);
+	gtk_container_add(GTK_CONTAINER(box2), box3);
+	gtk_widget_show( box3);
+
+	label = gtk_label_new("Heart rate: ");
+	gtk_box_pack_start(GTK_BOX(box3), label, FALSE, FALSE, 0);
+	gtk_widget_show ( label);
+
+	label = gtk_label_new("--");
+	gtk_box_pack_start(GTK_BOX(box3), label, FALSE, FALSE, 0);
+	gtk_widget_show(label);
 
 	separator = gtk_hseparator_new();
 	gtk_box_pack_start(GTK_BOX(box1), separator, FALSE, TRUE, 0);
@@ -250,6 +274,7 @@ PhoneScopeGui::PhoneScopeGui(alsa_shared *shared_data) {
 	gtk_widget_show( window);
 
 	g_timeout_add(100, update_drawing_area_callback, drawing_area);
+	g_timeout_add_seconds(1, update_heart_rate_callback, this);
 
 	pthread_t read_tid;
 	int ret = pthread_create(&read_tid, NULL, update_values_thread, this);

@@ -28,10 +28,13 @@ class PhoneScopeGui {
 	GtkWidget *separator;
 	GtkWidget *table;
 	GtkWidget *drawing_area;
+	GtkWidget *box3;
 
 public:
 	GtkWidget *window;
+	GtkWidget *label;
 	DataStream *datastream;
+	alsa_shared *data;
 	DrawingAreaVars *drawing_area_vars;
 
 	PhoneScopeGui(alsa_shared *shared_data);
